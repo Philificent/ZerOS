@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="ZerOS — a browser operating system. Dark glass, one living database.">
+  <title>ZerOS</title>
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="stylesheet" href="css/zeros.css">
+</head>
+<body>
+  <!-- Layer 0: wallpaper -->
+  <div id="wallpaper"></div>
+
+  <!-- Layer 1: light shafts anchored to the 0,0 vanishing point -->
+  <canvas id="shafts"></canvas>
+
+  <!-- Layer 2: desktop surface (icons + widgets) -->
+  <main id="desktop" aria-label="ZerOS desktop">
+    <div id="desktop-icons"></div>
+    <div id="widgets"></div>
+  </main>
+
+  <!-- Layer 3: windows -->
+  <div id="windows"></div>
+
+  <!-- Layer 4: motes overlay (window-border dust in the shafts) -->
+  <canvas id="motes"></canvas>
+
+  <!-- Layer 5: chrome -->
+  <header id="topbar">
+    <div class="tb-left">
+      <img id="tb-logo" src="assets/logo.svg" alt="ZerOS">
+      <span class="tb-name">ZerOS</span>
+      <span id="tb-appname"></span>
+    </div>
+    <div class="tb-right">
+      <span id="tb-net" title="connection">●</span>
+      <span id="tb-fps" title="frames / second"></span>
+      <span id="tb-clock"></span>
+    </div>
+  </header>
+
+  <nav id="dock" aria-label="Dock"></nav>
+
+  <!-- Boot screen -->
+  <div id="boot">
+    <div class="boot-inner">
+      <svg id="boot-logo" viewBox="0 0 120 120" width="96" height="96" aria-hidden="true">
+        <circle class="bl-ring" cx="60" cy="60" r="46"/>
+        <path class="bl-z" d="M42 44 H78 L42 76 H78"/>
+        <circle class="bl-dot" cx="60" cy="60" r="2.5"/>
+      </svg>
+      <div class="boot-title">Zer<span>OS</span></div>
+      <div class="boot-status" id="boot-status">waking the kernel…</div>
+      <div class="boot-bar"><div id="boot-progress"></div></div>
+    </div>
+  </div>
+
+  <noscript>
+    <div style="position:fixed;inset:0;background:#0a0c10;color:#dfe6f0;display:grid;place-items:center;font-family:sans-serif;z-index:99">
+      ZerOS needs JavaScript to boot.
+    </div>
+  </noscript>
+
+  <script type="module" src="js/kernel/boot.js"></script>
+</body>
+</html>
