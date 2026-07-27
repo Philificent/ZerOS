@@ -7,6 +7,7 @@
  *    (DOM-walking html→md converter, CORS-proxy fallback)
  */
 import { listDocs, getDoc, saveDoc, deleteDoc } from '../kernel/db.js';
+import { fetchText, fetchReader } from '../kernel/net.js';
 
 export const WIDTH = 940;
 export const HEIGHT = 620;
@@ -205,27 +206,19 @@ export function htmlToMarkdown(html, baseUrl = '') {
   return md;
 }
 
-/* ================= remote fetch with CORS fallback ================= */
-async function fetchRemote(url) {
-  const attempts = [
-    url,
-    'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
-    'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url),
-  ];
-  let lastErr;
-  for (const u of attempts) {
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 9000);
-    try {
-      const res = await fetch(u, { redirect: 'follow', signal: ctl.signal });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const text = await res.text();
-      const type = res.headers.get('content-type') || '';
-      return { text, isHtml: type.includes('html') || /^\s*(<!doctype|<html|<head|<body)/i.test(text) };
-    } catch (e) { lastErr = e; }
-    finally { clearTimeout(timer); }
-  }
-  throw lastErr || new Error('fetch failed');
+/* ================= remote fetch (kernel net layer + reader fallback) ================= */
+async function fetchRemote(url, note = () => {}) {
+  try {
+    const { text, contentType, via } = await fetchText(url);
+    return {
+      text,
+      isHtml: contentType.includes('html') || /^\s*(<!doctype|<html|<head|<body)/i.test(text),
+      via,
+    };
+  } catch { /* every CORS route failed — reader renders it server-side */ }
+  note('direct + relays blocked — asking reader service…');
+  const md = await fetchReader(url);
+  return { text: md, isHtml: false, via: 'r.jina.ai (reader)' };
 }
 
 /* ================= UI ================= */
@@ -378,16 +371,16 @@ export async function launch(win, os) {
     setStatus('fetching ' + url + ' …');
     $('fetch').disabled = true;
     try {
-      const { text, isHtml } = await fetchRemote(url);
+      const { text, isHtml, via } = await fetchRemote(url, setStatus);
       const md = isHtml ? htmlToMarkdown(text, url) : text;
       currentId = null;
       src.value = md;
       dirty = true;
       refresh();
       win.setTitle('Inkwell — fetched');
-      os.toast(isHtml ? 'converted page html → markdown' : 'fetched raw text');
+      os.toast((isHtml ? 'converted page html → markdown' : 'fetched as markdown/text') + ' · via ' + via);
     } catch (err) {
-      setStatus('fetch failed: ' + err.message + ' (site may block cross-origin reads)');
+      setStatus('fetch failed: ' + err.message);
     } finally {
       $('fetch').disabled = false;
     }
@@ -398,8 +391,8 @@ export async function launch(win, os) {
   await refreshDocList();
 }
 
-/* preview typography (injected once) */
-function injectPreviewCSS() {
+/* preview typography (injected once; shared with Periscope + Antenna) */
+export function injectPreviewCSS() {
   if (document.getElementById('md-preview-css')) return;
   const st = document.createElement('style');
   st.id = 'md-preview-css';

@@ -18,8 +18,10 @@ OS's own brain.
 |---|---|
 | **Voltline** 🕹 | Fully functional neon snake. Arrows/WASD, speeds up as you eat, hall-of-fame persisted in the database. |
 | **Zero48** 🕹 | Fully functional 2048 — slide/merge, win & lose detection, undo, swipe support, best score in the database. |
-| **Inkwell** ✍ | Functional Markdown editor: live side-by-side preview (built-in renderer), documents saved to the `documents` table, and **remote fetch** — paste any URL and its HTML is converted to Markdown by a DOM-walking html→md converter (with CORS-proxy fallback). |
+| **Inkwell** ✍ | Functional Markdown editor: live side-by-side preview (built-in renderer), documents saved to the `documents` table, and **remote fetch** — paste any URL and its HTML is converted to Markdown by a DOM-walking html→md converter (direct fetch → raced CORS relays → server-side reader fallback). |
 | **Vaporforge** 🎨 | The **Wallpaper Generator**. Drives the vendored [`waterpipe-ts`](https://github.com/) fractal-smoke library, rendered offscreen **at your desktop's native resolution** (the window shows a live cover-fit preview): presets seeded from your theme, color/opacity/detail controls, re-roll, PNG export — and one click stores the pixel-exact frame in the `wallpapers` table and sets it as your desktop. |
+| **Periscope** 🌐 | A small web browser, honest about the sandbox: **live mode** embeds the real site in an iframe (sites that refuse framing appear blank), **reader mode** pulls any page through the kernel net layer and distills it to markdown — links keep navigating inside the app — plus back/forward history and an open-in-host-browser escape hatch. |
+| **Antenna** 📡 | RSS/Atom feed reader. Subscriptions live in the `feeds` table, fetching rides the same CORS-relay racing net layer, articles are distilled through the escaped html→md→html pipeline. |
 | **Preferences** ⚙ | Wallpaper picker (procedural, built-ins, everything you forged, **and your own uploads** — re-encoded at native screen size), widget visibility, the color system and atmosphere toggles. |
 | **ZeroShell** ★ | The special feature — see below. |
 
@@ -105,15 +107,16 @@ Deploy the folder as-is to any static host:
 
 Everything is vendored (`vendor/pglite`, `vendor/waterpipe`); there are no
 external dependencies, no build step, no CDN calls. The only optional network
-use is Inkwell's remote fetch.
+use is remote content the user asks for (Inkwell fetch, Periscope, Antenna),
+which goes direct first and falls back to public CORS relays.
 
 ## Layout
 
 ```
 index.html            shell document
 css/zeros.css         glass design system (driven by --hue/--sat/--glow)
-js/kernel/            boot, db (PGlite), window manager, theme, atmosphere, widgets
-js/apps/              registry + the six applications
+js/kernel/            boot, db (PGlite), net (CORS relays), window manager, theme, atmosphere, widgets
+js/apps/              registry + the eight applications
 vendor/waterpipe/     waterpipe-ts (fractal smoke) — ESM build
 vendor/pglite/        PGlite (PostgreSQL/WASM) — ESM build + wasm + data
 assets/               logo + app icons (SVG)

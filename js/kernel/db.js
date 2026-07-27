@@ -13,6 +13,7 @@
 export const bus = new EventTarget();
 export const emit = (type, detail) => bus.dispatchEvent(new CustomEvent(type, { detail }));
 export const on = (type, fn) => bus.addEventListener(type, fn);
+export const off = (type, fn) => bus.removeEventListener(type, fn);
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -43,6 +44,12 @@ CREATE TABLE IF NOT EXISTS shell_history (
   id         SERIAL PRIMARY KEY,
   cmd        TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS feeds (
+  id         SERIAL PRIMARY KEY,
+  url        TEXT NOT NULL UNIQUE,
+  title      TEXT NOT NULL DEFAULT '',
+  added_at   TIMESTAMPTZ DEFAULT now()
 );
 `;
 
@@ -280,4 +287,42 @@ export async function getHistory(n = 100) {
   if (!pg) return [];
   const r = await pg.query('SELECT cmd FROM shell_history ORDER BY id DESC LIMIT $1', [n]);
   return r.rows.map(x => x.cmd).reverse();
+}
+
+/* ---------------- rss/atom feeds ---------------- */
+export async function listFeeds() {
+  if (pg) {
+    const r = await pg.query('SELECT id, url, title FROM feeds ORDER BY id');
+    return r.rows;
+  }
+  return (ls.load().feeds || []);
+}
+
+export async function addFeed(url, title = '') {
+  if (pg) {
+    const r = await pg.query(
+      'INSERT INTO feeds (url, title) VALUES ($1,$2) ON CONFLICT (url) DO UPDATE SET title = EXCLUDED.title RETURNING id',
+      [url, title],
+    );
+    emit('feeds:changed');
+    return r.rows[0].id;
+  }
+  const d = ls.load();
+  d.feeds = d.feeds || [];
+  let f = d.feeds.find(x => x.url === url);
+  if (f) f.title = title;
+  else { f = { id: Date.now(), url, title }; d.feeds.push(f); }
+  ls.save(d);
+  emit('feeds:changed');
+  return f.id;
+}
+
+export async function deleteFeed(id) {
+  if (pg) await pg.query('DELETE FROM feeds WHERE id = $1', [id]);
+  else {
+    const d = ls.load();
+    d.feeds = (d.feeds || []).filter(f => String(f.id) !== String(id));
+    ls.save(d);
+  }
+  emit('feeds:changed');
 }

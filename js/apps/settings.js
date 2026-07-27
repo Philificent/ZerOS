@@ -5,7 +5,7 @@
  * The color system is intentionally narrow: one hue dial + one
  * intensity dial + a palette mode (mono / duotone / complementary).
  */
-import { getSetting, setSetting, listWallpapers, deleteWallpaper, addWallpaper, on } from '../kernel/db.js';
+import { getSetting, setSetting, listWallpapers, deleteWallpaper, addWallpaper, on, off } from '../kernel/db.js';
 import { setTheme, currentTheme } from '../kernel/theme.js';
 
 export const WIDTH = 620;
@@ -89,6 +89,11 @@ export async function launch(win, os) {
 
   const $ = s => body.querySelector(`[data-st="${s}"]`);
 
+  /* every bus subscription is tracked so a closed window goes silent */
+  const subs = [];
+  const listen = (type, fn) => { on(type, fn); subs.push([type, fn]); };
+  win.onClose(() => { for (const [type, fn] of subs) off(type, fn); });
+
   /* ---- theme controls ---- */
   function syncTheme() {
     const t = currentTheme();
@@ -108,9 +113,9 @@ export async function launch(win, os) {
   for (const b of $('mode').children) {
     b.addEventListener('click', () => setTheme({ mode: b.dataset.mode }));
   }
-  on('setting:hue', syncTheme);
-  on('setting:intensity', syncTheme);
-  on('setting:colormode', syncTheme);
+  listen('setting:hue', syncTheme);
+  listen('setting:intensity', syncTheme);
+  listen('setting:colormode', syncTheme);
   syncTheme();
 
   /* ---- atmosphere + widget toggles ---- */
@@ -119,7 +124,7 @@ export async function launch(win, os) {
     const sync = () => { el.checked = getSetting(key, 'on') !== 'off'; };
     sync();
     el.addEventListener('change', () => setSetting(key, el.checked ? 'on' : 'off'));
-    on('setting:' + key, sync);   // stays honest when toggled from the context menu / shell
+    listen('setting:' + key, sync);   // stays honest when toggled from the context menu / shell
   };
   bindToggle('motes', 'motes');
   bindToggle('cursorglow', 'cglow');
@@ -143,10 +148,14 @@ export async function launch(win, os) {
     $('file').value = '';
   });
 
-  /* ---- wallpapers ---- */
+  /* ---- wallpapers ----
+   * renderWalls is async (it awaits the DB), so two overlapping runs
+   * used to append the stored tiles twice. A generation counter makes
+   * every run build off-DOM and only the newest one may commit; all
+   * re-renders flow through bus events (no manual double-triggering). */
+  let wallGen = 0;
   async function renderWalls() {
-    const host = $('wps');
-    host.textContent = '';
+    const gen = ++wallGen;
     const current = getSetting('wallpaper', '');
 
     const tile = (label, bg, onclick, removable, isCurrent) => {
@@ -166,42 +175,52 @@ export async function launch(win, os) {
         x.style.cssText = 'position:absolute;top:4px;right:4px;width:18px;height:18px;border-radius:50%;border:0;background:hsl(0 60% 45%/.85);color:#fff;cursor:pointer;font-size:12px;line-height:1;';
         x.addEventListener('click', async e => {
           e.stopPropagation();
-          await deleteWallpaper(removable);
-          if (String(current) === String(removable)) await setSetting('wallpaper', '');
-          renderWalls();
+          x.disabled = true;                       // one row per click, ever
+          if (String(getSetting('wallpaper', '')) === String(removable)) {
+            await setSetting('wallpaper', '');
+          }
+          await deleteWallpaper(removable);        // emits wallpapers:changed → re-render
         });
         d.appendChild(x);
       }
       return d;
     };
 
+    const frag = document.createDocumentFragment();
+
     /* procedural default */
-    host.appendChild(tile('procedural (theme)', 'background:radial-gradient(120% 120% at 0% 0%, hsl(var(--hue) 50% 22%), hsl(var(--hue) 30% 6%) 60%)',
-      async () => { await setSetting('wallpaper', ''); renderWalls(); }, null, current === ''));
+    frag.appendChild(tile('procedural (theme)', 'background:radial-gradient(120% 120% at 0% 0%, hsl(var(--hue) 50% 22%), hsl(var(--hue) 30% 6%) 60%)',
+      () => setSetting('wallpaper', ''), null, current === ''));
 
-    /* built-ins */
-    for (const [name, css] of BUILTINS) {
-      host.appendChild(tile(name, `background:${css}`, async () => {
-        const rows = await listWallpapers();
-        let existing = rows.find(w => w.kind === 'css' && w.name === name);
-        const id = existing ? existing.id : await addWallpaper(name, 'css', css);
-        await setSetting('wallpaper', String(id));
-        renderWalls();
-      }, null, false));
-    }
-
-    /* stored (generated + applied) */
     const rows = await listWallpapers();
-    for (const w of rows) {
-      const bg = w.kind === 'image' ? `background-image:url("${w.data}");background-size:cover;background-position:center` : `background:${w.data}`;
-      host.appendChild(tile(w.name, bg, async () => {
-        await setSetting('wallpaper', String(w.id));
-        renderWalls();
-      }, w.id, String(current) === String(w.id)));
+    if (gen !== wallGen) return;                   // a newer render superseded this one
+
+    /* built-ins (stored copies double as the row when applied) */
+    for (const [name, css] of BUILTINS) {
+      const stored = rows.find(w => w.kind === 'css' && w.name === name);
+      frag.appendChild(tile(name, `background:${css}`, async () => {
+        const id = stored ? stored.id : await addWallpaper(name, 'css', css);
+        await setSetting('wallpaper', String(id));
+      }, null, stored ? String(current) === String(stored.id) : false));
     }
+
+    /* stored (generated / uploaded), minus the built-in css copies shown above */
+    const builtinNames = new Set(BUILTINS.map(([name]) => name));
+    for (const w of rows) {
+      if (w.kind === 'css' && builtinNames.has(w.name)) continue;
+      const bg = w.kind === 'image' ? `background-image:url("${w.data}");background-size:cover;background-position:center` : `background:${w.data}`;
+      frag.appendChild(tile(w.name, bg,
+        () => setSetting('wallpaper', String(w.id)),
+        w.id, String(current) === String(w.id)));
+    }
+
+    const host = $('wps');
+    host.textContent = '';
+    host.appendChild(frag);                        // atomic swap, no half-rendered grid
   }
   renderWalls();
-  on('wallpapers:changed', renderWalls);
+  listen('wallpapers:changed', renderWalls);
+  listen('setting:wallpaper', renderWalls);
 
   $('openwg').addEventListener('click', e => { e.preventDefault(); os.launch('wallgen'); });
 }

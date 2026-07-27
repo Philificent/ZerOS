@@ -32,6 +32,20 @@ export const APPS = [
     module: () => import('../apps/wallgen.js'),
   },
   {
+    id: 'browser',
+    name: 'Periscope',
+    desc: 'web browser — live iframe or reader mode',
+    icon: 'assets/icons/browser.svg',
+    module: () => import('../apps/browser.js'),
+  },
+  {
+    id: 'rss',
+    name: 'Antenna',
+    desc: 'rss / atom feed reader',
+    icon: 'assets/icons/rss.svg',
+    module: () => import('../apps/rss.js'),
+  },
+  {
     id: 'settings',
     name: 'Preferences',
     desc: 'wallpaper · widgets · color theme · atmosphere',
