@@ -4,9 +4,10 @@
  *  - live side-by-side preview (own renderer, HTML-escaped by design)
  *  - documents stored in the OS database
  *  - remote fetch: pull any URL, convert its HTML into markdown
- *    (DOM-walking html→md converter, CORS-proxy fallback)
+ *    (DOM-walking html→md converter, CORS-proxy fallback) — other apps
+ *    can hand a link over by launching Inkwell with { url }
  */
-import { listDocs, getDoc, saveDoc, deleteDoc } from '../kernel/db.js';
+import { listDocs, getDoc, saveDoc, deleteDoc, on, off } from '../kernel/db.js';
 import { fetchText, fetchReader } from '../kernel/net.js';
 
 export const WIDTH = 940;
@@ -248,7 +249,7 @@ console.log("the web is a markdown document in denial");
 > Open ZeroShell and try: \`SELECT title FROM documents;\`
 `;
 
-export async function launch(win, os) {
+export async function launch(win, os, args) {
   const body = win.body;
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%;">
@@ -361,13 +362,13 @@ export async function launch(win, os) {
     os.toast('document deleted');
   });
 
-  $('fetch').addEventListener('click', doFetch);
+  $('fetch').addEventListener('click', () => doFetch());
   $('url').addEventListener('keydown', e => { if (e.key === 'Enter') doFetch(); });
 
-  async function doFetch() {
-    let url = $('url').value.trim();
+  async function doFetch(url = $('url').value.trim()) {
     if (!url) return;
     if (!/^https?:\/\//.test(url)) url = 'https://' + url;
+    $('url').value = url;
     setStatus('fetching ' + url + ' …');
     $('fetch').disabled = true;
     try {
@@ -386,8 +387,17 @@ export async function launch(win, os) {
     }
   }
 
-  src.value = WELCOME;
-  refresh();
+  /* another app (Antenna, say) sending a link to an already-open Inkwell */
+  const onArgs = e => { if (e.detail?.url) doFetch(e.detail.url); };
+  on('app:markdown:args', onArgs);
+  win.onClose(() => off('app:markdown:args', onArgs));
+
+  if (args?.url) {
+    await doFetch(args.url);
+  } else {
+    src.value = WELCOME;
+    refresh();
+  }
   await refreshDocList();
 }
 

@@ -187,6 +187,17 @@ export async function launch(win, os) {
       a.textContent = 'read original ↗';
       p.appendChild(a);
       art.appendChild(p);
+
+      /* hand the link to Inkwell, which fetches it and converts to markdown */
+      const p2 = document.createElement('p');
+      const b = document.createElement('button');
+      b.className = 'zbtn ghost';
+      b.style.fontSize = '11px';
+      b.textContent = 'read in Inkwell';
+      b.title = 'pull the full page into Inkwell as markdown';
+      b.addEventListener('click', () => os.launch('markdown', { url: item.link }));
+      p2.appendChild(b);
+      art.appendChild(p2);
     }
     art.scrollTop = 0;
   }

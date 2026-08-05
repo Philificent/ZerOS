@@ -4,7 +4,7 @@
  */
 import { APPS, appById } from '../apps/registry.js';
 import { createWindow, windowsFor, restoreWindow, focusWindow } from './wm.js';
-import { on, getSetting, getWallpaper } from './db.js';
+import { on, emit, getSetting, getWallpaper } from './db.js';
 
 /* ---------------- toasts ---------------- */
 let toastHost = null;
@@ -24,7 +24,12 @@ export function toast(msg, ms = 3200) {
 /* ---------------- app launching ---------------- */
 const loaded = new Map();   // appId -> module
 
-export async function launch(appId) {
+/**
+ * Launch an app, optionally handing it arguments (e.g. Antenna sending a
+ * link to Inkwell). Fresh instances get the args as the third launch
+ * parameter; an already-running instance hears them on `app:<id>:args`.
+ */
+export async function launch(appId, args) {
   const app = appById(appId);
   if (!app) return toast(`no such app: ${appId}`);
 
@@ -34,6 +39,7 @@ export async function launch(appId) {
     const w = open[0];
     if (w.el.classList.contains('minimized')) restoreWindow(w.id);
     else focusWindow(w.id);
+    if (args) emit(`app:${appId}:args`, args);
     return;
   }
 
@@ -50,7 +56,7 @@ export async function launch(appId) {
       width: mod.WIDTH,
       height: mod.HEIGHT,
     });
-    await mod.launch(win, { toast, launch });
+    await mod.launch(win, { toast, launch }, args);
   } catch (err) {
     console.error(`[zeros] failed to launch ${appId}`, err);
     toast(`${app.name} crashed on launch — see console`);
