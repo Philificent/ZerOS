@@ -56,11 +56,14 @@ export async function launch(win, os) {
   const out = body.querySelector('[data-zs="out"]');
   const input = body.querySelector('[data-zs="in"]');
 
-  const print = (text, color) => {
+  /** Scrollback cap. A long session used to append a node per line forever. */
+    const MAX_LINES = 500;
+    const print = (text, color) => {
     const div = document.createElement('div');
     div.textContent = text;
     if (color) div.style.color = color;
-    out.appendChild(div);
+      out.appendChild(div);
+    while (out.children.length > MAX_LINES) out.firstChild.remove();
     out.scrollTop = out.scrollHeight;
   };
   const printHTMLTable = rows => {
