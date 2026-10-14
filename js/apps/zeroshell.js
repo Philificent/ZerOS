@@ -33,6 +33,7 @@ const HELP = `
     neofetch             system summary with too much pride
     history              recent commands
     dump                 download the database (gzipped tarball)
+    jobs                 list scheduled jobs and whether each is due
     clear                wipe the screen
 
   everything else is executed as SQL against the live OS database.
@@ -121,6 +122,7 @@ export async function launch(win, os) {
         return print(hist.slice(-25).map((h, i) => `  ${String(hist.length - 25 + i + 1).padStart(4)}  ${h}`).join('\n') || '  (empty)');
       case 'neofetch': return neofetch();
       case 'dump': return dump();
+      case 'jobs': return jobs();
       case '': return;
       default: return runSQL(cmd);
     }
@@ -138,6 +140,24 @@ export async function launch(win, os) {
         await refreshFromDB();       // ← the OS reacts to your SQL
         if (!quiet) print('⟳ kernel re-read the database', 'var(--acc)');
       }
+    } catch (err) {
+      print('ERROR: ' + err.message, 'hsl(6 70% 60%)');
+    }
+  }
+
+  async function jobs() {
+    try {
+      const res = await sql('SELECT id, name, schedule, enabled, last_run, last_error FROM jobs ORDER BY id');
+      const rows = res.rows.map(r => ({
+          id: r.id,
+          name: r.name,
+        schedule: r.schedule,
+        enabled: r.enabled,
+        last_run: r.last_run ? new Date(r.last_run).toISOString().slice(5, 16).replace('T', ' ') : 'never',
+        error: r.last_error || '',
+      }));
+      if (rows.length) printHTMLTable(rows);
+      else print('(no jobs — INSERT INTO jobs (name, schedule, sql) VALUES (...))', 'var(--ink-mute)');
     } catch (err) {
       print('ERROR: ' + err.message, 'hsl(6 70% 60%)');
     }

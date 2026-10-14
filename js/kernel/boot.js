@@ -4,7 +4,7 @@
  * @ts-check
  */
 
-import { initDB } from './db.js';
+import { initDB, startScheduler } from './db.js';
 import { initTheme } from './theme.js';
 import { initAtmosphere } from './motes.js';
 import { initWidgets } from './widgets.js';
@@ -29,6 +29,10 @@ async function boot() {
   status('mounting database…');
   const { mode, boots } = await initDB(m => status(m));
   progress(55);
+
+  status('checking scheduled jobs…');
+  const jobs = await startScheduler();
+  if (jobs.ran) toast(`${jobs.ran} scheduled job${jobs.ran === 1 ? '' : 's'} ran at boot`, 4000);
 
   status('applying theme…');
   initTheme();

@@ -42,6 +42,22 @@ SELECT title FROM documents;                       -- your Inkwell files
 CREATE TABLE plans (idea TEXT);                    -- sure, extend your OS schema
 ```
 
+The database can also *act*. A `jobs` table holds SQL the kernel runs for
+you — every 30 seconds it fires whatever is due, inside a transaction, then
+re-reads state exactly as ZeroShell does after a write:
+
+```sql
+INSERT INTO jobs (name, schedule, sql) VALUES ('night shift', 'daily',
+  $$UPDATE settings SET value = CASE
+      WHEN extract(hour from now()) BETWEEN 7 AND 19 THEN '210' ELSE '265' END
+    WHERE key='hue'$$);
+SELECT id, name, schedule, last_run, last_error FROM jobs;   -- or just: jobs
+UPDATE jobs SET enabled = false WHERE name = 'night shift';  -- stop it
+```
+
+Schedules: `boot`, `30s`, `5m`, `hourly`, `daily`, `at 21:30`. A failing job
+records its error and the rest still run.
+
 The database is one browser's IndexedDB, so it leaves with `dump` — a
 gzipped tarball of the Postgres data dir, from ZeroShell or
 **Preferences → Database**. Restoring replaces the live database and

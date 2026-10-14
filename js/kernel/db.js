@@ -37,7 +37,7 @@ export const on = (type, fn) => bus.addEventListener(type, fn);
 export const off = (type, fn) => bus.removeEventListener(type, fn);
 
 /** Current schema version — bump when adding migrations */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 /** @type {Array<{version: number, name: string, up: (pg: any) => Promise<void>}>} */
 const MIGRATIONS = [
@@ -94,6 +94,23 @@ const MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS idx_documents_updated ON documents(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_feeds_url ON feeds(url);
         CREATE INDEX IF NOT EXISTS idx_shell_history_id ON shell_history(id DESC);
+      `);
+    },
+  },
+    {
+    version: 3,
+    name: 'jobs',
+    up: async (pg) => {
+      await pg.exec(`
+        CREATE TABLE IF NOT EXISTS jobs (
+          id         SERIAL PRIMARY KEY,
+          name       TEXT NOT NULL DEFAULT '',
+          schedule   TEXT NOT NULL,
+          sql        TEXT NOT NULL,
+          enabled    BOOLEAN NOT NULL DEFAULT true,
+          last_run   TIMESTAMPTZ,
+          last_error TEXT
+        );
       `);
     },
   },
@@ -305,6 +322,110 @@ export async function refreshFromDB() {
   await loadSettings();
   for (const [k, v] of cache) if (before.get(k) !== v) emit('setting:' + k, v);
   emit('db:refresh');
+}
+
+/* ---------------- jobs ---------------- */
+/**
+ * How often the scheduler wakes. Schedules are minute-grained, so this only
+ * bounds how late a job runs.
+ */
+const TICK_MS = 30_000;
+/** @type {ReturnType<typeof setInterval> | null} */
+let scheduler = null;
+let ticking = false;
+/** Boot jobs fire once per page load, tracked here rather than in last_run. */
+const bootRan = new Set();
+
+/**
+ * Whether a job is due. `lastRun` null means it has never fired.
+ *   boot        — once per page load (caller decides)
+ *   5m / 90s    — interval, counted from last_run
+ *   hourly      — once per clock hour
+ *   daily       — once per calendar day
+ *   at HH:MM    — once a day, at the first tick at or past that minute
+ * @param {string} schedule
+ * @param {Date | null} lastRun
+ * @param {Date} now
+ * @returns {boolean}
+ */
+export function jobDue(schedule, lastRun, now) {
+  const spec = String(schedule).trim().toLowerCase();
+  const every = spec.match(/^every\s+(\d+)\s*(s|m|h)$/) || spec.match(/^(\d+)\s*(s|m|h)$/);
+  if (every) {
+    if (!lastRun) return true;
+    const n = Number(every[1]);
+    const unit = every[2] === 'h' ? 3_600_000 : every[2] === 'm' ? 60_000 : 1000;
+    return now.getTime() - lastRun.getTime() >= n * unit;
+  }
+  if (spec === 'hourly') return !lastRun || lastRun.getHours() !== now.getHours() || now - lastRun >= 3_600_000;
+  if (spec === 'daily') return !lastRun || lastRun.toDateString() !== now.toDateString();
+  const at = spec.match(/^(?:at\s+)?(\d{1,2}):(\d{2})$/);
+  if (at) {
+    const mins = Number(at[1]) * 60 + Number(at[2]);
+    if (mins >= 1440) return false;
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    if (nowMins < mins) return false;
+    if (!lastRun || lastRun.toDateString() !== now.toDateString()) return true;
+    return lastRun.getHours() * 60 + lastRun.getMinutes() < mins;
+  }
+  return false;
+}
+
+/**
+ * Run every enabled job that is due, each in its own transaction, then let
+ * the desktop react to whatever the SQL changed.
+ * @param {Date} [now]
+ * @param {{ includeBoot?: boolean }} [opts]
+ * @returns {Promise<{ran: number, failed: number}>}
+ */
+export async function runDueJobs(now = new Date(), { includeBoot = false } = {}) {
+  if (!pg || ticking) return { ran: 0, failed: 0 };
+  ticking = true;
+  let ran = 0;
+  let failed = 0;
+  try {
+    const res = await pg.query(
+      'SELECT id, name, schedule, sql, last_run FROM jobs WHERE enabled ORDER BY id',
+    );
+    let changed = false;
+    for (const job of res.rows) {
+      const spec = String(job.schedule).trim().toLowerCase();
+      const due = spec === 'boot'
+        ? includeBoot && !bootRan.has(job.id)
+        : jobDue(spec, job.last_run ? new Date(job.last_run) : null, now);
+      if (!due) continue;
+      if (spec === 'boot') bootRan.add(job.id);
+      try {
+        await pg.transaction(tx => tx.exec(job.sql));
+        await pg.query('UPDATE jobs SET last_run = now(), last_error = NULL WHERE id = $1', [job.id]);
+        ran++;
+        changed = true;
+      } catch (err) {
+        failed++;
+        console.warn(`[zeros] job ${job.id} (${job.name || job.schedule}) failed:`, err);
+        await pg.query('UPDATE jobs SET last_run = now(), last_error = $2 WHERE id = $1', [job.id, String(err.message || err).slice(0, 500)]);
+      }
+    }
+    if (changed) {
+      await refreshFromDB();
+      emit('jobs:ran', { ran, failed });
+    }
+  } finally {
+    ticking = false;
+  }
+  return { ran, failed };
+}
+
+/**
+ * Start the scheduler. `boot` jobs fire immediately; everything else is
+ * checked on a fixed tick. No-op in fallback mode and safe to call twice.
+ * @returns {Promise<{ran: number, failed: number}>}
+ */
+export async function startScheduler() {
+  if (!pg) return { ran: 0, failed: 0 };
+  if (scheduler) clearInterval(scheduler);
+  scheduler = setInterval(() => { runDueJobs().catch(err => console.warn('[zeros] scheduler:', err)); }, TICK_MS);
+  return runDueJobs(new Date(), { includeBoot: true });
 }
 
 /* ---------------- settings ---------------- */
