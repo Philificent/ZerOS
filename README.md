@@ -49,6 +49,51 @@ itself. It's the desktop-as-database, and the shell is `psql` for your
 wallpaper. Built-ins included too: `help`, `apps`, `open <app>`, `theme`,
 `tables`, `neofetch`, `history`.
 
+
+## Command Palette ⌘K
+
+Press **Cmd/Ctrl + K** anywhere to open the Spotlight-style command palette.
+Fuzzy-search across:
+- **Apps** — launch any installed app
+- **Documents** — open Inkwell docs directly
+- **Settings** — quick toggles for motes, cursor glow, widgets
+- **Theme presets** — 8 named hue colors (Red, Orange, Green, Teal, Cyan, Blue, Purple, Pink)
+- **SQL queries** — common SELECTs pre-written for ZeroShell
+- **Window actions** — focus any open window
+
+Navigate with ↑↓ arrows, run with Enter, close with Escape.
+
+## Keyboard Shortcuts
+
+System-wide shortcuts that work in any app:
+
+| Shortcut | Action |
+|---|---|
+| `Cmd/Ctrl + K` | Open command palette |
+| `Cmd/Ctrl + W` | Close focused window |
+| `Cmd/Ctrl + M` | Minimize focused window |
+| `Cmd/Ctrl + Tab` | Next window |
+| `Cmd/Ctrl + Shift + Tab` | Previous window |
+| `Cmd/Ctrl + \`` | Cycle windows (reverse) |
+| `Cmd/Ctrl + ,` | Open Preferences |
+| `Cmd/Ctrl + L` | Lock screen |
+| `Cmd/Ctrl + 1-7` | Quick-launch apps (Voltline through ZeroShell) |
+| `Escape` | Close menus, palette, or lock screen |
+
+See the full list in **Preferences → Keyboard Shortcuts**.
+
+## Error Recovery
+
+Apps are wrapped in error boundaries. If an app crashes, you'll see a
+recovery screen with options to **reload the app**, **close the window**,
+or **copy the error** to clipboard — instead of a blank window.
+
+## Database Migrations
+
+The database now has a proper migration system. Schema changes are tracked
+in the `schema_version` table and applied automatically on boot. Performance
+indexes are included for common queries (scores by game, documents by date).
+
 ## Widgets
 
 - **Clock** — analog + digital, date, timezone/UTC offset.

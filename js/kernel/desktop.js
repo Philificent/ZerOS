@@ -1,13 +1,24 @@
 /**
  * ZerOS kernel — desktop: dock, desktop icons, wallpaper, toasts,
  * app launching.
+ *
+ * @ts-check
  */
+
 import { APPS, appById } from '../apps/registry.js';
-import { createWindow, windowsFor, restoreWindow, focusWindow } from './wm.js';
+import { createWindow, windowsFor, restoreWindow, focusWindow, closeWindow } from './wm.js';
 import { on, emit, getSetting, getWallpaper } from './db.js';
+
+/** @typedef {{ id: string, el: HTMLElement, body: HTMLElement, appId: string, title: string, onClose?: () => void, onResize?: () => void, savedBox: any, setTitle: (t: string) => void, close: () => void, onResizeFn?: (fn: () => void) => void, onCloseFn?: (fn: () => void) => void }} WinHandle */
 
 /* ---------------- toasts ---------------- */
 let toastHost = null;
+
+/**
+ * Show a toast notification.
+ * @param {string} msg
+ * @param {number} [ms]
+ */
 export function toast(msg, ms = 3200) {
   if (!toastHost) {
     toastHost = document.createElement('div');
@@ -21,13 +32,73 @@ export function toast(msg, ms = 3200) {
   setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 350); }, ms);
 }
 
+/* ---------------- error boundary ---------------- */
+
+/**
+ * Show an error UI inside a window when an app crashes.
+ * @param {WinHandle} win
+ * @param {Error} err
+ * @param {string} appName
+ */
+function showErrorBoundary(win, err, appName) {
+  const stack = err.stack || err.message || String(err);
+  win.body.innerHTML = `
+    <div class="error-boundary">
+      <div class="eb-icon">⚠</div>
+      <h2>${escapeHtml(appName)} crashed</h2>
+      <p class="eb-message">${escapeHtml(err.message || 'Unknown error')}</p>
+      <details class="eb-details">
+        <summary>Technical details</summary>
+        <pre class="eb-stack">${escapeHtml(stack)}</pre>
+      </details>
+      <div class="eb-actions">
+        <button class="zbtn primary" data-eb="reload">Reload app</button>
+        <button class="zbtn ghost" data-eb="close">Close window</button>
+        <button class="zbtn ghost" data-eb="report">Copy error</button>
+      </div>
+    </div>
+  `;
+
+  win.body.querySelector('[data-eb="reload"]')?.addEventListener('click', () => {
+    // Reload the app by closing and relaunching
+    const appId = win.appId;
+    closeWindow(win.id);
+    setTimeout(() => launch(appId), 300);
+  });
+
+  win.body.querySelector('[data-eb="close"]')?.addEventListener('click', () => {
+    closeWindow(win.id);
+  });
+
+  win.body.querySelector('[data-eb="report"]')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(`ZerOS App Crash Report\nApp: ${appName}\nError: ${err.message}\n\nStack:\n${stack}`);
+      toast('Error copied to clipboard');
+    } catch {
+      toast('Could not copy to clipboard');
+    }
+  });
+}
+
+/**
+ * @param {string} s
+ * @returns {string}
+ */
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 /* ---------------- app launching ---------------- */
+/** @type {Map<string, any>} */
 const loaded = new Map();   // appId -> module
 
 /**
  * Launch an app, optionally handing it arguments (e.g. Antenna sending a
  * link to Inkwell). Fresh instances get the args as the third launch
  * parameter; an already-running instance hears them on `app:<id>:args`.
+ * @param {string} appId
+ * @param {any} [args]
+ * @returns {Promise<void>}
  */
 export async function launch(appId, args) {
   const app = appById(appId);
@@ -43,13 +114,16 @@ export async function launch(appId, args) {
     return;
   }
 
+  /** @type {WinHandle | null} */
+  let win = null;
+
   try {
     let mod = loaded.get(appId);
     if (!mod) {
       mod = await app.module();
       loaded.set(appId, mod);
     }
-    const win = createWindow({
+    win = createWindow({
       appId,
       title: app.name,
       icon: app.icon,
@@ -59,13 +133,20 @@ export async function launch(appId, args) {
     await mod.launch(win, { toast, launch }, args);
   } catch (err) {
     console.error(`[zeros] failed to launch ${appId}`, err);
-    toast(`${app.name} crashed on launch — see console`);
+    if (win) {
+      // Show error boundary inside the window
+      showErrorBoundary(win, err, app.name);
+    } else {
+      // Window creation failed — show toast
+      toast(`${app.name} crashed on launch — see console`);
+    }
   }
 }
 
 /* ---------------- dock ---------------- */
 function buildDock() {
   const dock = document.getElementById('dock');
+  if (!dock) return;
   dock.textContent = '';
   for (const app of APPS) {
     const b = document.createElement('button');
@@ -94,6 +175,7 @@ function buildDock() {
 /* ---------------- desktop icons ---------------- */
 function buildIcons() {
   const host = document.getElementById('desktop-icons');
+  if (!host) return;
   host.textContent = '';
   for (const app of APPS) {
     const b = document.createElement('button');
@@ -114,6 +196,7 @@ function buildIcons() {
 /* ---------------- wallpaper ---------------- */
 export async function applyWallpaper() {
   const el = document.getElementById('wallpaper');
+  if (!el) return;
   const id = getSetting('wallpaper', '');
   if (!id) {   // procedural default (pure CSS, theme-reactive)
     el.style.backgroundImage = '';

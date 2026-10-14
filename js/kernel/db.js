@@ -8,51 +8,106 @@
  *
  * If PGlite cannot start (e.g. opened from file://), a localStorage
  * fallback keeps the OS bootable; raw SQL is then unavailable.
+ *
+ * @ts-check
  */
 
+/** @typedef {{ key: string, value: string }} SettingRow */
+/** @typedef {{ id: number, name: string, kind: string, data: string, created_at?: string }} WallpaperRow */
+/** @typedef {{ id: number, game: string, player: string, score: number, created_at?: string }} ScoreRow */
+/** @typedef {{ id: number, title: string, content: string, updated_at?: string }} DocRow */
+/** @typedef {{ id: number, cmd: string, created_at?: string }} HistoryRow */
+/** @typedef {{ id: number, url: string, title: string, added_at?: string }} FeedRow */
+
 export const bus = new EventTarget();
+/**
+ * @param {string} type
+ * @param {any} [detail]
+ */
 export const emit = (type, detail) => bus.dispatchEvent(new CustomEvent(type, { detail }));
+/**
+ * @param {string} type
+ * @param {(e: CustomEvent) => void} fn
+ */
 export const on = (type, fn) => bus.addEventListener(type, fn);
+/**
+ * @param {string} type
+ * @param {(e: CustomEvent) => void} fn
+ */
 export const off = (type, fn) => bus.removeEventListener(type, fn);
 
+/** Current schema version — bump when adding migrations */
+const SCHEMA_VERSION = 2;
+
+/** @type {Array<{version: number, name: string, up: (pg: any) => Promise<void>}>} */
+const MIGRATIONS = [
+  {
+    version: 1,
+    name: 'initial_schema',
+    up: async (pg) => {
+      await pg.exec(`
+        CREATE TABLE IF NOT EXISTS settings (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS wallpapers (
+          id         SERIAL PRIMARY KEY,
+          name       TEXT NOT NULL,
+          kind       TEXT NOT NULL DEFAULT 'css',
+          data       TEXT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS scores (
+          id         SERIAL PRIMARY KEY,
+          game       TEXT NOT NULL,
+          player     TEXT NOT NULL DEFAULT 'you',
+          score      INTEGER NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS documents (
+          id         SERIAL PRIMARY KEY,
+          title      TEXT NOT NULL,
+          content    TEXT NOT NULL DEFAULT '',
+          updated_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS shell_history (
+          id         SERIAL PRIMARY KEY,
+          cmd        TEXT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS feeds (
+          id         SERIAL PRIMARY KEY,
+          url        TEXT NOT NULL UNIQUE,
+          title      TEXT NOT NULL DEFAULT '',
+          added_at   TIMESTAMPTZ DEFAULT now()
+        );
+      `);
+    },
+  },
+  {
+    version: 2,
+    name: 'add_indexes',
+    up: async (pg) => {
+      // Performance indexes for common queries
+      await pg.exec(`
+        CREATE INDEX IF NOT EXISTS idx_scores_game_score ON scores(game, score DESC);
+        CREATE INDEX IF NOT EXISTS idx_documents_updated ON documents(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_feeds_url ON feeds(url);
+        CREATE INDEX IF NOT EXISTS idx_shell_history_id ON shell_history(id DESC);
+      `);
+    },
+  },
+];
+
 const SCHEMA = `
-CREATE TABLE IF NOT EXISTS settings (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS wallpapers (
-  id         SERIAL PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS schema_version (
+  version    INTEGER PRIMARY KEY,
   name       TEXT NOT NULL,
-  kind       TEXT NOT NULL DEFAULT 'css',   -- 'css' | 'image'
-  data       TEXT NOT NULL,                 -- css background value or data-URL
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS scores (
-  id         SERIAL PRIMARY KEY,
-  game       TEXT NOT NULL,
-  player     TEXT NOT NULL DEFAULT 'you',
-  score      INTEGER NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS documents (
-  id         SERIAL PRIMARY KEY,
-  title      TEXT NOT NULL,
-  content    TEXT NOT NULL DEFAULT '',
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS shell_history (
-  id         SERIAL PRIMARY KEY,
-  cmd        TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS feeds (
-  id         SERIAL PRIMARY KEY,
-  url        TEXT NOT NULL UNIQUE,
-  title      TEXT NOT NULL DEFAULT '',
-  added_at   TIMESTAMPTZ DEFAULT now()
+  applied_at TIMESTAMPTZ DEFAULT now()
 );
 `;
 
+/** @type {Record<string, string>} */
 const DEFAULT_SETTINGS = {
   hue: '210',
   intensity: '0.55',
@@ -65,26 +120,64 @@ const DEFAULT_SETTINGS = {
   booted_times: '0',
 };
 
+/** @type {any} */
 let pg = null;              // PGlite instance (null in fallback mode)
+/** @type {'pglite' | 'local'} */
 let mode = 'pglite';        // 'pglite' | 'local'
+/** @type {Map<string, string>} */
 const cache = new Map();    // settings cache
 
 /* ---------------- localStorage fallback ---------------- */
 const LS_KEY = 'zeros-fallback';
 const ls = {
-  load() { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch { return {}; } },
+  /** @returns {any} */
+  load() { try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}') || {}; } catch { return {}; } },
+  /** @param {any} d */
   save(d) { try { localStorage.setItem(LS_KEY, JSON.stringify(d)); } catch { /* full */ } },
 };
 
+/* ---------------- migrations ---------------- */
+/**
+ * Run pending migrations against the database.
+ * @param {any} pgInstance - PGlite instance
+ * @param {(msg: string) => void} [progress]
+ */
+async function runMigrations(pgInstance, progress = () => {}) {
+  // Create schema_version table first
+  await pgInstance.exec(SCHEMA);
+
+  // Get current version
+  const result = await pgInstance.query('SELECT COALESCE(MAX(version), 0) as version FROM schema_version');
+  let currentVersion = Number(result.rows[0]?.version || 0);
+
+  // Run pending migrations in order
+  for (const migration of MIGRATIONS) {
+    if (migration.version > currentVersion) {
+      progress(`migrating to v${migration.version} (${migration.name})…`);
+      await migration.up(pgInstance);
+      await pgInstance.query(
+        'INSERT INTO schema_version (version, name) VALUES ($1, $2)',
+        [migration.version, migration.name]
+      );
+      currentVersion = migration.version;
+    }
+  }
+}
+
 /* ---------------- init ---------------- */
+/**
+ * Initialize the database. Returns the mode and boot count.
+ * @param {(msg: string) => void} [progress]
+ * @returns {Promise<{mode: 'pglite' | 'local', boots: number}>}
+ */
 export async function initDB(progress = () => {}) {
   try {
     progress('loading postgres (wasm)…');
     const { PGlite } = await import('../../vendor/pglite/index.js');
     pg = new PGlite('idb://zeros');
     await pg.waitReady;
-    progress('migrating schema…');
-    await pg.exec(SCHEMA);
+    progress('running migrations…');
+    await runMigrations(pg, progress);
     mode = 'pglite';
   } catch (err) {
     console.warn('[zeros] PGlite unavailable, using localStorage fallback:', err);
@@ -98,9 +191,15 @@ export async function initDB(progress = () => {}) {
   return { mode, boots };
 }
 
+/** @returns {'pglite' | 'local'} */
 export const dbMode = () => mode;
 
-/** Raw SQL access — powers ZeroShell. Throws in fallback mode. */
+/**
+ * Raw SQL access — powers ZeroShell. Throws in fallback mode.
+ * @param {string} text
+ * @param {any[]} [params]
+ * @returns {Promise<any>}
+ */
 export async function sql(text, params = []) {
   if (!pg) throw new Error('raw SQL unavailable (PGlite failed to start)');
   return pg.query(text, params);
@@ -133,10 +232,20 @@ async function loadSettings() {
   }
 }
 
+/**
+ * @param {string} key
+ * @param {string | null} [def]
+ * @returns {string | null}
+ */
 export function getSetting(key, def = null) {
   return cache.has(key) ? cache.get(key) : def;
 }
 
+/**
+ * @param {string} key
+ * @param {string | number | boolean} value
+ * @returns {Promise<void>}
+ */
 export async function setSetting(key, value) {
   value = String(value);
   cache.set(key, value);
@@ -155,6 +264,7 @@ export async function setSetting(key, value) {
 }
 
 /* ---------------- wallpapers ---------------- */
+/** @returns {Promise<WallpaperRow[]>} */
 export async function listWallpapers() {
   if (pg) {
     const r = await pg.query('SELECT id, name, kind, data FROM wallpapers ORDER BY id');
@@ -163,6 +273,12 @@ export async function listWallpapers() {
   return (ls.load().wallpapers || []);
 }
 
+/**
+ * @param {string} name
+ * @param {string} kind
+ * @param {string} data
+ * @returns {Promise<number>}
+ */
 export async function addWallpaper(name, kind, data) {
   if (pg) {
     const r = await pg.query(
@@ -181,6 +297,10 @@ export async function addWallpaper(name, kind, data) {
   return id;
 }
 
+/**
+ * @param {number | string} id
+ * @returns {Promise<void>}
+ */
 export async function deleteWallpaper(id) {
   if (pg) await pg.query('DELETE FROM wallpapers WHERE id = $1', [id]);
   else {
@@ -191,6 +311,10 @@ export async function deleteWallpaper(id) {
   emit('wallpapers:changed');
 }
 
+/**
+ * @param {number | string} id
+ * @returns {Promise<WallpaperRow | null>}
+ */
 export async function getWallpaper(id) {
   if (pg) {
     const r = await pg.query('SELECT id, name, kind, data FROM wallpapers WHERE id = $1', [id]);
@@ -200,6 +324,12 @@ export async function getWallpaper(id) {
 }
 
 /* ---------------- game scores ---------------- */
+/**
+ * @param {string} game
+ * @param {number} score
+ * @param {string} [player]
+ * @returns {Promise<void>}
+ */
 export async function addScore(game, score, player = 'you') {
   if (pg) {
     await pg.query('INSERT INTO scores (game, player, score) VALUES ($1,$2,$3)', [game, player, score]);
@@ -212,6 +342,11 @@ export async function addScore(game, score, player = 'you') {
   emit('scores:changed', { game });
 }
 
+/**
+ * @param {string} game
+ * @param {number} [n]
+ * @returns {Promise<ScoreRow[]>}
+ */
 export async function topScores(game, n = 5) {
   if (pg) {
     const r = await pg.query(
@@ -227,6 +362,7 @@ export async function topScores(game, n = 5) {
 }
 
 /* ---------------- documents (markdown) ---------------- */
+/** @returns {Promise<Pick<DocRow, 'id' | 'title' | 'updated_at'>[]>} */
 export async function listDocs() {
   if (pg) {
     const r = await pg.query('SELECT id, title, updated_at FROM documents ORDER BY updated_at DESC');
@@ -235,6 +371,10 @@ export async function listDocs() {
   return (ls.load().docs || []).map(({ id, title, updated_at }) => ({ id, title, updated_at }));
 }
 
+/**
+ * @param {number | string} id
+ * @returns {Promise<DocRow | null>}
+ */
 export async function getDoc(id) {
   if (pg) {
     const r = await pg.query('SELECT * FROM documents WHERE id = $1', [id]);
@@ -243,12 +383,18 @@ export async function getDoc(id) {
   return (ls.load().docs || []).find(x => String(x.id) === String(id)) || null;
 }
 
+/**
+ * @param {number | string | null} id
+ * @param {string} title
+ * @param {string} content
+ * @returns {Promise<number>}
+ */
 export async function saveDoc(id, title, content) {
   if (pg) {
     if (id) {
       await pg.query('UPDATE documents SET title=$1, content=$2, updated_at=now() WHERE id=$3', [title, content, id]);
       emit('docs:changed');
-      return id;
+      return Number(id);
     }
     const r = await pg.query('INSERT INTO documents (title, content) VALUES ($1,$2) RETURNING id', [title, content]);
     emit('docs:changed');
@@ -265,9 +411,13 @@ export async function saveDoc(id, title, content) {
   }
   ls.save(d);
   emit('docs:changed');
-  return id;
+  return Number(id);
 }
 
+/**
+ * @param {number | string} id
+ * @returns {Promise<void>}
+ */
 export async function deleteDoc(id) {
   if (pg) await pg.query('DELETE FROM documents WHERE id = $1', [id]);
   else {
@@ -279,10 +429,18 @@ export async function deleteDoc(id) {
 }
 
 /* ---------------- shell history ---------------- */
+/**
+ * @param {string} cmd
+ * @returns {Promise<void>}
+ */
 export async function addHistory(cmd) {
   if (pg) await pg.query('INSERT INTO shell_history (cmd) VALUES ($1)', [cmd]);
 }
 
+/**
+ * @param {number} [n]
+ * @returns {Promise<string[]>}
+ */
 export async function getHistory(n = 100) {
   if (!pg) return [];
   const r = await pg.query('SELECT cmd FROM shell_history ORDER BY id DESC LIMIT $1', [n]);
@@ -290,6 +448,7 @@ export async function getHistory(n = 100) {
 }
 
 /* ---------------- rss/atom feeds ---------------- */
+/** @returns {Promise<FeedRow[]>} */
 export async function listFeeds() {
   if (pg) {
     const r = await pg.query('SELECT id, url, title FROM feeds ORDER BY id');
@@ -298,6 +457,11 @@ export async function listFeeds() {
   return (ls.load().feeds || []);
 }
 
+/**
+ * @param {string} url
+ * @param {string} [title]
+ * @returns {Promise<number>}
+ */
 export async function addFeed(url, title = '') {
   if (pg) {
     const r = await pg.query(
@@ -317,6 +481,10 @@ export async function addFeed(url, title = '') {
   return f.id;
 }
 
+/**
+ * @param {number | string} id
+ * @returns {Promise<void>}
+ */
 export async function deleteFeed(id) {
   if (pg) await pg.query('DELETE FROM feeds WHERE id = $1', [id]);
   else {

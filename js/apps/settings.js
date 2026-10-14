@@ -1,15 +1,18 @@
 /**
  * Preferences — wallpaper (incl. your own uploads), widgets, color
- * theme, atmosphere.
+ * theme, atmosphere, keyboard shortcuts reference.
  *
  * The color system is intentionally narrow: one hue dial + one
  * intensity dial + a palette mode (mono / duotone / complementary).
+ *
+ * @ts-check
  */
 import { getSetting, setSetting, listWallpapers, deleteWallpaper, addWallpaper, on, off } from '../kernel/db.js';
 import { setTheme, currentTheme } from '../kernel/theme.js';
+import { getShortcuts } from '../kernel/shortcuts.js';
 
 export const WIDTH = 620;
-export const HEIGHT = 640;
+export const HEIGHT = 720;
 
 /* built-in CSS wallpapers (theme-aware via hue vars where possible) */
 const BUILTINS = [
@@ -19,6 +22,26 @@ const BUILTINS = [
   ['carbon', 'repeating-linear-gradient(45deg, hsl(220 15% 7%) 0 12px, hsl(220 18% 9%) 12px 24px)'],
   ['void', 'radial-gradient(100% 100% at 0% 0%, hsl(220 30% 10%), hsl(220 30% 3%) 70%)'],
 ];
+
+/**
+ * @param {string} combo
+ * @returns {string}
+ */
+function formatCombo(combo) {
+  return combo.split('+').map(k => {
+    const map = {
+      'mod': navigator.platform.includes('Mac') ? '⌘' : 'Ctrl',
+      'shift': '⇧',
+      'alt': '⌥',
+      'ctrl': 'Ctrl',
+      'cmd': '⌘',
+      'tab': 'Tab',
+      'esc': 'Esc',
+      '`': '`',
+    };
+    return map[k] || k.toUpperCase();
+  }).join(' ');
+}
 
 export async function launch(win, os) {
   const body = win.body;
@@ -74,6 +97,11 @@ export async function launch(win, os) {
         </div>
       </section>
 
+      <section class="shortcuts-help">
+        <div class="zlabel" style="margin-bottom:10px">keyboard shortcuts</div>
+        <div class="shortcuts-grid" data-st="shortcuts"></div>
+      </section>
+
       <section>
         <div class="zlabel" style="margin-bottom:10px">wallpaper</div>
         <div data-st="wps" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;"></div>
@@ -93,6 +121,18 @@ export async function launch(win, os) {
   const subs = [];
   const listen = (type, fn) => { on(type, fn); subs.push([type, fn]); };
   win.onClose(() => { for (const [type, fn] of subs) off(type, fn); });
+
+  /* ---- keyboard shortcuts reference ---- */
+  const shortcutsList = $('shortcuts');
+  if (shortcutsList) {
+    const shortcuts = getShortcuts();
+    shortcutsList.innerHTML = shortcuts.map(({ combo, description }) => `
+      <div class="shortcut-row">
+        <span class="desc">${description}</span>
+        <span class="keys">${formatCombo(combo).split(' ').map(k => `<kbd>${k}</kbd>`).join('')}</span>
+      </div>
+    `).join('');
+  }
 
   /* ---- theme controls ---- */
   function syncTheme() {
@@ -226,7 +266,10 @@ export async function launch(win, os) {
 }
 
 /** Decode an image file and re-encode it at (at most) the screen's
- *  native pixel size, so uploads don't bloat the wallpapers table. */
+ *  native pixel size, so uploads don't bloat the wallpapers table.
+ * @param {File} file
+ * @returns {Promise<string>}
+ */
 async function fileToWallpaper(file) {
   const bmp = await createImageBitmap(file);
   const dpr = Math.min(window.devicePixelRatio || 1, 2);

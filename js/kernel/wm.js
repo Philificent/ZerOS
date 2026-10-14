@@ -4,17 +4,34 @@
  * Draggable, resizable glass windows with focus-depth: the focused
  * window sits closest to the glass, unfocused ones recede (blur, dim,
  * shallower shadows). Shadows are cast away from the 0,0 light origin.
+ *
+ * @ts-check
  */
+
 import { emit } from './db.js';
 import { provideWindowRects } from './motes.js';
 
-const layer = () => document.getElementById('windows');
+/** @typedef {{ x: number, y: number, w: number, h: number }} WindowRect */
+/** @typedef {{ id: string, el: HTMLElement, body: HTMLElement, appId: string, title: string, onClose?: () => void, onResize?: () => void, savedBox: any }} WindowRecord */
+/** @typedef {{ id: string, el: HTMLElement, body: HTMLElement, setTitle: (t: string) => void, close: () => void, onResize: (fn: () => void) => void, onClose: (fn: () => void) => void }} WindowHandle */
+/** @typedef {{ appId: string, title: string, icon?: string, width?: number, height?: number, x?: number, y?: number, onClose?: () => void, onResize?: () => void }} CreateWindowOpts */
 
+const layer = () => /** @type {HTMLElement} */ (document.getElementById('windows'));
+
+/** @type {number} */
 let zTop = 10;
+/** @type {number} */
 let seq = 0;
+/** @type {Map<string, WindowRecord>} */
 const wins = new Map();          // id -> record
 
+/** @returns {WindowRecord[]} */
 export const openWindows = () => [...wins.values()];
+
+/**
+ * @param {string} appId
+ * @returns {WindowRecord[]}
+ */
 export const windowsFor = appId => openWindows().filter(w => w.appId === appId);
 
 provideWindowRects(() =>
@@ -26,6 +43,9 @@ provideWindowRects(() =>
     }),
 );
 
+/**
+ * @param {string} id
+ */
 export function focusWindow(id) {
   const w = wins.get(id);
   if (!w) return;
@@ -40,6 +60,9 @@ export function focusWindow(id) {
   emit('wm:change');
 }
 
+/**
+ * @param {string} id
+ */
 export function closeWindow(id) {
   const w = wins.get(id);
   if (!w) return;
@@ -53,6 +76,9 @@ export function closeWindow(id) {
   emit('wm:change');
 }
 
+/**
+ * @param {string} id
+ */
 export function minimizeWindow(id) {
   const w = wins.get(id);
   if (!w) return;
@@ -60,6 +86,9 @@ export function minimizeWindow(id) {
   emit('wm:change');
 }
 
+/**
+ * @param {string} id
+ */
 export function restoreWindow(id) {
   const w = wins.get(id);
   if (!w) return;
@@ -67,6 +96,9 @@ export function restoreWindow(id) {
   focusWindow(id);
 }
 
+/**
+ * @param {string} id
+ */
 export function toggleMaximize(id) {
   const w = wins.get(id);
   if (!w) return;
@@ -88,6 +120,8 @@ export function toggleMaximize(id) {
  * opts: { appId, title, icon (svg string or url), width, height, x, y,
  *         onClose(), onResize() }
  * Returns { id, el, body, setTitle, close, api }.
+ * @param {CreateWindowOpts} opts
+ * @returns {WindowHandle}
  */
 export function createWindow(opts) {
   const id = 'w' + (++seq);
@@ -125,7 +159,8 @@ export function createWindow(opts) {
   layer().appendChild(el);
   setTimeout(() => el.classList.remove('opening'), 300);
 
-  const body = el.querySelector('.win-body');
+  const body = /** @type {HTMLElement} */ (el.querySelector('.win-body'));
+  /** @type {WindowRecord} */
   const rec = {
     id, el, body,
     appId: opts.appId,
@@ -143,7 +178,7 @@ export function createWindow(opts) {
   el.addEventListener('pointerdown', () => focusWindow(id));
 
   /* drag by titlebar */
-  const bar = el.querySelector('.win-title');
+  const bar = /** @type {HTMLElement} */ (el.querySelector('.win-title'));
   bar.addEventListener('pointerdown', ev => {
     if (ev.target.closest('.win-btns') || el.classList.contains('maxed')) return;
     ev.preventDefault();
@@ -166,7 +201,7 @@ export function createWindow(opts) {
   });
 
   /* resize handle */
-  const grip = el.querySelector('.win-resize');
+  const grip = /** @type {HTMLElement} */ (el.querySelector('.win-resize'));
   grip.addEventListener('pointerdown', ev => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -189,6 +224,7 @@ export function createWindow(opts) {
 
   focusWindow(id);
 
+  /** @type {WindowHandle} */
   return {
     id, el, body,
     setTitle(t) {

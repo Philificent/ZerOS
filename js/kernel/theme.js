@@ -8,19 +8,32 @@
  *   comp — secondary hue is the +180° complement
  * Everything else in the UI derives from the CSS custom properties
  * written here, so the whole OS re-tints from a single knob.
+ *
+ * @ts-check
  */
+
 import { getSetting, setSetting, on } from './db.js';
+
+/** @typedef {'mono' | 'duo' | 'comp'} ColorMode */
+/** @typedef {{ hue: number, intensity: number, mode: ColorMode }} Theme */
+/** @typedef {{ accent: string, accent2: string, deep: string, deep2: string, hue: number, hue2: number, intensity: number }} ThemeColors */
 
 const root = document.documentElement;
 
+/** @returns {Theme} */
 export function currentTheme() {
   return {
     hue: parseFloat(getSetting('hue', '210')),
     intensity: parseFloat(getSetting('intensity', '0.55')),
-    mode: getSetting('colormode', 'duo'),
+    mode: /** @type {ColorMode} */ (getSetting('colormode', 'duo')),
   };
 }
 
+/**
+ * @param {number} hue
+ * @param {ColorMode} mode
+ * @returns {number}
+ */
 export function secondaryHue(hue, mode) {
   if (mode === 'comp') return (hue + 180) % 360;
   if (mode === 'duo') return (hue + 40) % 360;
@@ -36,6 +49,10 @@ export function applyTheme() {
   root.style.setProperty('--glow', intensity.toFixed(2));
 }
 
+/**
+ * @param {{ hue?: number, intensity?: number, mode?: ColorMode }} opts
+ * @returns {Promise<void>}
+ */
 export async function setTheme({ hue, intensity, mode }) {
   if (hue !== undefined) await setSetting('hue', String(hue));
   if (intensity !== undefined) await setSetting('intensity', String(intensity));
@@ -49,7 +66,9 @@ export function initTheme() {
   on('setting:colormode', applyTheme);
 }
 
-/** Convenience: theme accents as hex, for canvas consumers (waterpipe). */
+/** Convenience: theme accents as hex, for canvas consumers (waterpipe).
+ * @returns {ThemeColors}
+ */
 export function themeColors() {
   const { hue, intensity, mode } = currentTheme();
   const h2 = secondaryHue(hue, mode);
@@ -63,6 +82,12 @@ export function themeColors() {
   };
 }
 
+/**
+ * @param {number} h - hue 0-360
+ * @param {number} s - saturation 0-100
+ * @param {number} l - lightness 0-100
+ * @returns {string} hex color
+ */
 export function hslToHex(h, s, l) {
   s /= 100; l /= 100;
   const k = n => (n + h / 30) % 12;
