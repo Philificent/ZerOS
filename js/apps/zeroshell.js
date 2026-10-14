@@ -14,7 +14,7 @@
  *   inspect, script and even break your own OS with SQL — a real
  *   Postgres speaking over WASM inside a static web page.
  */
-import { sql, refreshFromDB, addHistory, getHistory, dbMode, getSetting } from '../kernel/db.js';
+import { sql, refreshFromDB, addHistory, getHistory, dbMode, getSetting, dumpDB } from '../kernel/db.js';
 import { APPS } from '../apps/registry.js';
 
 export const WIDTH = 720;
@@ -32,6 +32,7 @@ const HELP = `
     theme <hue> [int]    set theme hue 0-359 (+ intensity 0-1)
     neofetch             system summary with too much pride
     history              recent commands
+    dump                 download the database (gzipped tarball)
     clear                wipe the screen
 
   everything else is executed as SQL against the live OS database.
@@ -119,6 +120,7 @@ export async function launch(win, os) {
       case 'history':
         return print(hist.slice(-25).map((h, i) => `  ${String(hist.length - 25 + i + 1).padStart(4)}  ${h}`).join('\n') || '  (empty)');
       case 'neofetch': return neofetch();
+      case 'dump': return dump();
       case '': return;
       default: return runSQL(cmd);
     }
@@ -139,6 +141,20 @@ export async function launch(win, os) {
     } catch (err) {
       print('ERROR: ' + err.message, 'hsl(6 70% 60%)');
     }
+  }
+
+  async function dump() {
+    if (dbMode() !== 'pglite') return print('dump needs Postgres — the localStorage fallback has nothing to export', 'hsl(6 70% 60%)');
+    print('dumping data dir…', 'var(--ink-mute)');
+    const blob = await dumpDB();
+    const name = 'zeros-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.tar.gz';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    print(`saved ${name} · ${(blob.size / 1024).toFixed(0)} KB — restore it from Preferences`, 'var(--acc)');
   }
 
   function neofetch() {

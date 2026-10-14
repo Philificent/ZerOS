@@ -7,7 +7,7 @@
  *
  * @ts-check
  */
-import { getSetting, setSetting, listWallpapers, deleteWallpaper, addWallpaper, on, off } from '../kernel/db.js';
+import { getSetting, setSetting, listWallpapers, deleteWallpaper, addWallpaper, on, off, dumpDB, stageRestore, dbMode } from '../kernel/db.js';
 import { setTheme, currentTheme } from '../kernel/theme.js';
 import { getShortcuts } from '../kernel/shortcuts.js';
 
@@ -103,6 +103,18 @@ export async function launch(win, os) {
       </section>
 
       <section>
+        <div class="zlabel" style="margin-bottom:10px">database</div>
+        <p style="font-size:12px;color:var(--ink-dim);margin:0 0 10px;">
+          The whole OS is one Postgres database in this browser. A dump is the only copy that survives clearing site data.
+        </p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <button class="zbtn" data-st="dump">download dump</button>
+          <button class="zbtn" data-st="restore">restore from file…</button>
+          <input type="file" data-st="dumpfile" accept=".gz,.tgz,application/gzip" style="display:none">
+        </div>
+        </section>
+
+        <section>
         <div class="zlabel" style="margin-bottom:10px">wallpaper</div>
         <div data-st="wps" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;"></div>
         <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
@@ -263,6 +275,42 @@ export async function launch(win, os) {
   listen('setting:wallpaper', renderWalls);
 
   $('openwg').addEventListener('click', e => { e.preventDefault(); os.launch('wallgen'); });
+
+  /* ---- database dump / restore ---- */
+  if (dbMode() !== 'pglite') $('dump').disabled = true;
+  $('dump').addEventListener('click', async () => {
+    $('dump').disabled = true;
+    try {
+      const blob = await dumpDB();
+      if (!blob) { os.toast('no database to dump — Postgres is not running'); return; }
+      const name = 'zeros-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.tar.gz';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      os.toast('saved ' + name);
+    } catch (err) {
+      os.toast('dump failed: ' + err.message);
+    } finally {
+      $('dump').disabled = dbMode() !== 'pglite';
+    }
+  });
+  $('restore').addEventListener('click', () => $('dumpfile').click());
+  $('dumpfile').addEventListener('change', async () => {
+    const f = $('dumpfile').files[0];
+    $('dumpfile').value = '';
+    if (!f) return;
+    if (!confirm('Replace the OS database with ' + f.name + '? This reloads ZerOS.')) return;
+    try {
+      os.toast('restoring — ZerOS will reload');
+      await stageRestore(f);
+      location.reload();
+    } catch (err) {
+      os.toast('restore failed: ' + err.message);
+    }
+  });
 }
 
 /** Decode an image file and re-encode it at (at most) the screen's

@@ -42,6 +42,11 @@ SELECT title FROM documents;                       -- your Inkwell files
 CREATE TABLE plans (idea TEXT);                    -- sure, extend your OS schema
 ```
 
+The database is one browser's IndexedDB, so it leaves with `dump` — a
+gzipped tarball of the Postgres data dir, from ZeroShell or
+**Preferences → Database**. Restoring replaces the live database and
+reloads the OS.
+
 **Why it's special:** most "browser OS" demos fake persistence with scattered
 localStorage keys. ZerOS has a single queryable, transactional source of truth
 — you can inspect it, script it, migrate it, or break it, from inside the OS

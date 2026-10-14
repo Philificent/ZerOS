@@ -170,15 +170,49 @@ async function runMigrations(pgInstance, progress = () => {}) {
  * @param {(msg: string) => void} [progress]
  * @returns {Promise<{mode: 'pglite' | 'local', boots: number}>}
  */
+
+/**
+ * The vendored bundle's first dynamic import races the wasm download and
+ * throws "Failed to fetch dynamically imported module" once, then succeeds.
+ * Retry before surrendering the OS to the localStorage fallback.
+ * @param {number} tries
+ * @returns {Promise<any>}
+ */
+async function loadPGlite(tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await import('../../vendor/pglite/index.js');
+    } catch (err) {
+      last = err;
+      await new Promise(r => setTimeout(r, 400 * (i + 1)));
+    }
+  }
+  throw last;
+}
+
+/**
+ * Open the OS database, running migrations. `blob` replaces an empty data
+ * dir with a tarball from {@link dumpDB} — the caller must have deleted
+ * the IndexedDB first, since PGlite refuses to load over an existing cluster.
+ * @param {(msg: string) => void} progress
+ * @param {Blob | File | null} [blob]
+ */
+async function openDB(progress, blob = null) {
+  const { PGlite } = await loadPGlite();
+  pg = blob
+    ? new PGlite({ dataDir: 'idb://zeros', loadDataDir: blob })
+    : new PGlite('idb://zeros');
+  await pg.waitReady;
+  progress('running migrations…');
+  await runMigrations(pg, progress);
+  mode = 'pglite';
+}
+
 export async function initDB(progress = () => {}) {
   try {
     progress('loading postgres (wasm)…');
-    const { PGlite } = await import('../../vendor/pglite/index.js');
-    pg = new PGlite('idb://zeros');
-    await pg.waitReady;
-    progress('running migrations…');
-    await runMigrations(pg, progress);
-    mode = 'pglite';
+    if (!await consumeRestore(progress)) await openDB(progress);
   } catch (err) {
     console.warn('[zeros] PGlite unavailable, using localStorage fallback:', err);
     pg = null;
@@ -193,6 +227,66 @@ export async function initDB(progress = () => {}) {
 
 /** @returns {'pglite' | 'local'} */
 export const dbMode = () => mode;
+
+/* ---------------- dump / restore ---------------- */
+/** IndexedDB name PGlite derives from `idb://zeros` (see vendor IDBFS). */
+const IDB_NAME = '/pglite/zeros';
+const DUMP_TYPE = 'application/gzip';
+
+/**
+ * Gzipped tarball of the live Postgres data dir. Null in fallback mode.
+ * @returns {Promise<Blob | null>}
+ */
+export async function dumpDB() {
+  if (!pg) return null;
+  const blob = await pg.dumpDataDir('gzip');
+  return blob.type ? blob : new Blob([blob], { type: DUMP_TYPE });
+}
+
+/**
+ * Hand a dump to the next boot, close Postgres, and wipe its IndexedDB so
+ * `loadDataDir` finds an empty filesystem. The caller reloads the page.
+ * @param {Blob | File} blob
+ * @returns {Promise<void>}
+ */
+export async function stageRestore(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  sessionStorage.setItem('zeros-restore', JSON.stringify({
+    type: blob.type || DUMP_TYPE,
+    b64: btoa(bin),
+  }));
+  if (pg) {
+    try { await pg.close(); } catch (err) { console.warn('[zeros] close before restore:', err); }
+    pg = null;
+  }
+  await new Promise((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(IDB_NAME);
+    req.onsuccess = () => resolve(undefined);
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => reject(new Error('database still open in another tab — close it and retry'));
+  });
+}
+
+/**
+ * Consume a dump staged by {@link stageRestore}. No-op when there is none.
+ * @param {(msg: string) => void} progress
+ * @returns {Promise<boolean>} whether a restore happened
+ */
+async function consumeRestore(progress) {
+  const raw = sessionStorage.getItem('zeros-restore');
+  if (!raw) return false;
+  sessionStorage.removeItem('zeros-restore');
+  progress('restoring database…');
+  const { type, b64 } = JSON.parse(raw);
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  await openDB(progress, new Blob([bytes], { type }));
+  return true;
+}
 
 /**
  * Raw SQL access — powers ZeroShell. Throws in fallback mode.
